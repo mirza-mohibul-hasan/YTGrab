@@ -19,6 +19,8 @@ class DownloadItem:
     url: str
     output_dir: str
     format_selector: str = "best"
+    postprocessors: list[dict] = field(default_factory=list)
+    merge_output_format: str | None = None
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     title: str = ""
     status: DownloadStatus = DownloadStatus.QUEUED
