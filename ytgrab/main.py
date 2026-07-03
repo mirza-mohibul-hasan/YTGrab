@@ -1,13 +1,13 @@
 import sys
 
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication
+
+from ytgrab.ui import MainWindow
 
 
 def main() -> None:
     app = QApplication(sys.argv)
-    window = QMainWindow()
-    window.setWindowTitle("YTGrab")
-    window.resize(900, 600)
+    window = MainWindow()
     window.show()
     sys.exit(app.exec())
 
