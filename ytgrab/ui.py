@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from ytgrab.models import DownloadItem, DownloadStatus
+from ytgrab.persistence import default_queue_path, load_queue, save_queue
 from ytgrab.presets import PRESET_CUSTOM, PRESET_LABELS, FormatSpec, resolve_format
 from ytgrab.workers import DownloadWorker, FormatListWorker, PlaylistProbeWorker, format_bytes
 
@@ -62,7 +63,10 @@ class MainWindow(QMainWindow):
         self.thread_pool = QThreadPool(self)
         self.thread_pool.setMaxThreadCount(DEFAULT_PARALLEL_DOWNLOADS)
 
+        self.queue_path = default_queue_path()
+
         self._build_ui()
+        self._load_persisted_queue()
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -123,6 +127,28 @@ class MainWindow(QMainWindow):
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         layout.addWidget(self.queue_table)
 
+    def _load_persisted_queue(self) -> None:
+        resumable = {DownloadStatus.QUEUED, DownloadStatus.FETCHING, DownloadStatus.DOWNLOADING}
+        for item in load_queue(self.queue_path):
+            self._items[item.id] = item
+            self._append_row(item)
+            if item.status == DownloadStatus.FETCHING:
+                self._probe_url(item)
+            elif item.status in resumable:
+                self._start_download(item)
+
+    def _save_queue(self) -> None:
+        save_queue(list(self._items.values()), self.queue_path)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        # Cancel in-flight downloads and drain the pool before saving, so no
+        # background worker can emit a signal after its QObject is torn down.
+        for worker in list(self._workers.values()):
+            worker.cancel()
+        self.thread_pool.waitForDone()
+        self._save_queue()
+        super().closeEvent(event)
+
     def _on_browse_clicked(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "Choose output folder", self.output_dir)
         if chosen:
@@ -176,6 +202,7 @@ class MainWindow(QMainWindow):
         self._items[item.id] = item
         self._append_row(item)
         self._probe_url(item)
+        self._save_queue()
         return item
 
     def _probe_url(self, item: DownloadItem) -> None:
@@ -234,6 +261,8 @@ class MainWindow(QMainWindow):
             self._items[child.id] = child
             self._append_row(child)
             self._start_download(child)
+
+        self._save_queue()
 
     def _remove_row(self, item_id: str) -> None:
         row = self._rows.pop(item_id, None)
@@ -304,6 +333,7 @@ class MainWindow(QMainWindow):
             button = self._cancel_buttons.get(item_id)
             if button is not None:
                 button.setEnabled(False)
+        self._save_queue()
 
     def _on_progress(self, item_id: str, percent: float, speed: str, eta: str) -> None:
         item = self._items.get(item_id)
