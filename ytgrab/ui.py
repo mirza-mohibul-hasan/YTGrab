@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import os
+import shutil
 
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
@@ -72,6 +73,18 @@ class MainWindow(QMainWindow):
         central = QWidget(self)
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
+
+        if shutil.which("ffmpeg") is None:
+            warning = QLabel(
+                "ffmpeg was not found on PATH. Merging separate video/audio "
+                "streams and MP3 extraction will not work until it's installed. "
+                "See the README for install instructions."
+            )
+            warning.setWordWrap(True)
+            warning.setStyleSheet(
+                "background-color: #fff3cd; color: #664d03; padding: 6px; border-radius: 4px;"
+            )
+            layout.addWidget(warning)
 
         input_row = QHBoxLayout()
         self.url_input = QLineEdit()
