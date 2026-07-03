@@ -35,6 +35,16 @@ def format_eta(seconds: float | None) -> str:
     return f"{minutes:d}:{seconds:02d}"
 
 
+def format_bytes(num_bytes: float | None) -> str:
+    if not num_bytes:
+        return "?"
+    for unit in ("B", "KB", "MB", "GB"):
+        if num_bytes < 1024:
+            return f"{num_bytes:.1f}{unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.1f}TB"
+
+
 class WorkerSignals(QObject):
     title_known = Signal(str, str)
     status_changed = Signal(str, DownloadStatus)
@@ -74,6 +84,30 @@ class PlaylistProbeWorker(QRunnable):
             self.signals.resolved.emit(self.item_id, info or {})
         except Exception as exc:  # noqa: BLE001 - surface any resolution failure to the UI
             self.signals.error.emit(self.item_id, str(exc))
+
+
+class FormatListSignals(QObject):
+    resolved = Signal(list)
+    error = Signal(str)
+
+
+class FormatListWorker(QRunnable):
+    """Fetches the real list of formats yt-dlp reports for a URL."""
+
+    def __init__(self, url: str) -> None:
+        super().__init__()
+        self.url = url
+        self.signals = FormatListSignals()
+
+    def run(self) -> None:
+        opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(self.url, download=False)
+            formats = (info or {}).get("formats") or []
+            self.signals.resolved.emit(formats)
+        except Exception as exc:  # noqa: BLE001 - surface any resolution failure to the UI
+            self.signals.error.emit(str(exc))
 
 
 class DownloadWorker(QRunnable):
