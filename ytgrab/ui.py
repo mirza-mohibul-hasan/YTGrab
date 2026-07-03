@@ -10,10 +10,12 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QLineEdit,
     QMainWindow,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -94,6 +96,14 @@ class MainWindow(QMainWindow):
         self.browse_button.clicked.connect(self._on_browse_clicked)
         output_row.addWidget(self.output_dir_edit)
         output_row.addWidget(self.browse_button)
+
+        output_row.addWidget(QLabel("Parallel downloads:"))
+        self.parallel_spinbox = QSpinBox()
+        self.parallel_spinbox.setRange(1, 10)
+        self.parallel_spinbox.setValue(DEFAULT_PARALLEL_DOWNLOADS)
+        self.parallel_spinbox.valueChanged.connect(self.thread_pool.setMaxThreadCount)
+        output_row.addWidget(self.parallel_spinbox)
+
         layout.addLayout(output_row)
 
         self.queue_table = QTableWidget(0, len(COLUMN_HEADERS))
