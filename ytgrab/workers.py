@@ -43,6 +43,39 @@ class WorkerSignals(QObject):
     finished = Signal(str)
 
 
+class ProbeSignals(QObject):
+    resolved = Signal(str, dict)  # item_id, yt-dlp info dict
+    error = Signal(str, str)
+
+
+class PlaylistProbeWorker(QRunnable):
+    """Resolves a URL to either a single video or a playlist's entries.
+
+    Uses extract_flat so probing a large playlist stays cheap: entries come
+    back with id/title/url but without per-video format data.
+    """
+
+    def __init__(self, item_id: str, url: str) -> None:
+        super().__init__()
+        self.item_id = item_id
+        self.url = url
+        self.signals = ProbeSignals()
+
+    def run(self) -> None:
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": "in_playlist",
+            "noplaylist": False,
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(self.url, download=False)
+            self.signals.resolved.emit(self.item_id, info or {})
+        except Exception as exc:  # noqa: BLE001 - surface any resolution failure to the UI
+            self.signals.error.emit(self.item_id, str(exc))
+
+
 class DownloadWorker(QRunnable):
     def __init__(self, item: DownloadItem) -> None:
         super().__init__()
