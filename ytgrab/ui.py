@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import functools
 import os
 
+from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -18,9 +20,22 @@ from PySide6.QtWidgets import (
 )
 
 from ytgrab.models import DownloadItem, DownloadStatus
+from ytgrab.workers import DownloadWorker
 
-COLUMN_TITLE, COLUMN_STATUS, COLUMN_PROGRESS, COLUMN_SPEED, COLUMN_ETA = range(5)
-COLUMN_HEADERS = ["Title", "Status", "Progress", "Speed", "ETA"]
+(
+    COLUMN_TITLE,
+    COLUMN_STATUS,
+    COLUMN_PROGRESS,
+    COLUMN_SPEED,
+    COLUMN_ETA,
+    COLUMN_ACTIONS,
+) = range(6)
+COLUMN_HEADERS = ["Title", "Status", "Progress", "Speed", "ETA", "Actions"]
+
+DEFAULT_PARALLEL_DOWNLOADS = 3
+
+# Statuses that mean a worker is no longer running for that item.
+TERMINAL_STATUSES = {DownloadStatus.DONE, DownloadStatus.ERROR, DownloadStatus.CANCELED}
 
 
 class MainWindow(QMainWindow):
@@ -31,7 +46,13 @@ class MainWindow(QMainWindow):
 
         self._items: dict[str, DownloadItem] = {}
         self._rows: dict[str, int] = {}
+        self._workers: dict[str, DownloadWorker] = {}
+        self._progress_bars: dict[str, QProgressBar] = {}
+        self._cancel_buttons: dict[str, QPushButton] = {}
         self.output_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+
+        self.thread_pool = QThreadPool(self)
+        self.thread_pool.setMaxThreadCount(DEFAULT_PARALLEL_DOWNLOADS)
 
         self._build_ui()
 
@@ -86,6 +107,7 @@ class MainWindow(QMainWindow):
         item = DownloadItem(url=url, output_dir=self.output_dir, format_selector=format_selector)
         self._items[item.id] = item
         self._append_row(item)
+        self._start_download(item)
         return item
 
     def _append_row(self, item: DownloadItem) -> None:
@@ -100,9 +122,71 @@ class MainWindow(QMainWindow):
         progress_bar.setRange(0, 100)
         progress_bar.setValue(int(item.progress))
         self.queue_table.setCellWidget(row, COLUMN_PROGRESS, progress_bar)
+        self._progress_bars[item.id] = progress_bar
 
         self.queue_table.setItem(row, COLUMN_SPEED, QTableWidgetItem(item.speed))
         self.queue_table.setItem(row, COLUMN_ETA, QTableWidgetItem(item.eta))
 
-    def _row_for(self, item_id: str) -> int | None:
-        return self._rows.get(item_id)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(functools.partial(self._on_cancel_clicked, item.id))
+        self.queue_table.setCellWidget(row, COLUMN_ACTIONS, cancel_button)
+        self._cancel_buttons[item.id] = cancel_button
+
+    def _start_download(self, item: DownloadItem) -> None:
+        worker = DownloadWorker(item)
+        worker.signals.title_known.connect(self._on_title_known)
+        worker.signals.status_changed.connect(self._on_status_changed)
+        worker.signals.progress.connect(self._on_progress)
+        worker.signals.error.connect(self._on_error)
+        worker.signals.finished.connect(self._on_worker_finished)
+        self._workers[item.id] = worker
+        self.thread_pool.start(worker)
+
+    def _on_cancel_clicked(self, item_id: str) -> None:
+        worker = self._workers.get(item_id)
+        if worker is not None:
+            worker.cancel()
+
+    def _on_title_known(self, item_id: str, title: str) -> None:
+        item = self._items.get(item_id)
+        if item is None:
+            return
+        item.title = title
+        row = self._rows[item_id]
+        self.queue_table.item(row, COLUMN_TITLE).setText(item.display_title())
+
+    def _on_status_changed(self, item_id: str, status: DownloadStatus) -> None:
+        item = self._items.get(item_id)
+        if item is None:
+            return
+        item.status = status
+        row = self._rows[item_id]
+        self.queue_table.item(row, COLUMN_STATUS).setText(status.value)
+        if status in TERMINAL_STATUSES:
+            button = self._cancel_buttons.get(item_id)
+            if button is not None:
+                button.setEnabled(False)
+
+    def _on_progress(self, item_id: str, percent: float, speed: str, eta: str) -> None:
+        item = self._items.get(item_id)
+        if item is None:
+            return
+        item.progress = percent
+        item.speed = speed
+        item.eta = eta
+        row = self._rows[item_id]
+        self._progress_bars[item_id].setValue(int(percent))
+        self.queue_table.item(row, COLUMN_SPEED).setText(speed)
+        self.queue_table.item(row, COLUMN_ETA).setText(eta)
+
+    def _on_error(self, item_id: str, message: str) -> None:
+        item = self._items.get(item_id)
+        if item is None:
+            return
+        item.error = message
+        row = self._rows[item_id]
+        status_item = self.queue_table.item(row, COLUMN_STATUS)
+        status_item.setToolTip(message)
+
+    def _on_worker_finished(self, item_id: str) -> None:
+        self._workers.pop(item_id, None)
