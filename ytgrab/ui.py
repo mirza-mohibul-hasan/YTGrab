@@ -6,6 +6,7 @@ import os
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from ytgrab.models import DownloadItem, DownloadStatus
+from ytgrab.presets import PRESET_CUSTOM, PRESET_LABELS, FormatSpec, resolve_format
 from ytgrab.workers import DownloadWorker
 
 (
@@ -71,6 +73,20 @@ class MainWindow(QMainWindow):
         input_row.addWidget(self.add_button)
         layout.addLayout(input_row)
 
+        format_row = QHBoxLayout()
+        self.format_combo = QComboBox()
+        for preset_key, label in PRESET_LABELS:
+            self.format_combo.addItem(label, preset_key)
+        self.format_combo.currentIndexChanged.connect(self._on_format_preset_changed)
+        self.custom_format_edit = QLineEdit()
+        self.custom_format_edit.setPlaceholderText(
+            "e.g. bv*[height<=720]+ba/b[height<=720]"
+        )
+        self.custom_format_edit.setEnabled(False)
+        format_row.addWidget(self.format_combo)
+        format_row.addWidget(self.custom_format_edit)
+        layout.addLayout(format_row)
+
         output_row = QHBoxLayout()
         self.output_dir_edit = QLineEdit(self.output_dir)
         self.output_dir_edit.setReadOnly(True)
@@ -96,15 +112,30 @@ class MainWindow(QMainWindow):
             self.output_dir = chosen
             self.output_dir_edit.setText(chosen)
 
+    def _on_format_preset_changed(self, _index: int) -> None:
+        preset_key = self.format_combo.currentData()
+        self.custom_format_edit.setEnabled(preset_key == PRESET_CUSTOM)
+
+    def _current_format_spec(self) -> FormatSpec:
+        preset_key = self.format_combo.currentData()
+        return resolve_format(preset_key, self.custom_format_edit.text())
+
     def _on_add_clicked(self) -> None:
         url = self.url_input.text().strip()
         if not url:
             return
-        self.add_item(url)
+        self.add_item(url, self._current_format_spec())
         self.url_input.clear()
 
-    def add_item(self, url: str, format_selector: str = "best") -> DownloadItem:
-        item = DownloadItem(url=url, output_dir=self.output_dir, format_selector=format_selector)
+    def add_item(self, url: str, format_spec: FormatSpec | None = None) -> DownloadItem:
+        format_spec = format_spec or resolve_format(PRESET_LABELS[0][0])
+        item = DownloadItem(
+            url=url,
+            output_dir=self.output_dir,
+            format_selector=format_spec.format_selector,
+            postprocessors=format_spec.postprocessors,
+            merge_output_format=format_spec.merge_output_format,
+        )
         self._items[item.id] = item
         self._append_row(item)
         self._start_download(item)

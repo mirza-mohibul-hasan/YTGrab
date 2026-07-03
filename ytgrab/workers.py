@@ -58,7 +58,7 @@ class DownloadWorker(QRunnable):
         return self._cancel_event.is_set()
 
     def _build_ydl_opts(self) -> dict:
-        return {
+        opts: dict = {
             "format": self.item.format_selector,
             "outtmpl": os.path.join(self.item.output_dir, "%(title)s.%(ext)s"),
             "noplaylist": True,
@@ -67,6 +67,11 @@ class DownloadWorker(QRunnable):
             "noprogress": True,
             "progress_hooks": [self._progress_hook],
         }
+        if self.item.postprocessors:
+            opts["postprocessors"] = self.item.postprocessors
+        if self.item.merge_output_format:
+            opts["merge_output_format"] = self.item.merge_output_format
+        return opts
 
     def _progress_hook(self, d: dict) -> None:
         if self._cancel_event.is_set():
