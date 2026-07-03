@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from ytgrab.models import DownloadItem, DownloadStatus
 from ytgrab.presets import PRESET_CUSTOM, PRESET_LABELS, FormatSpec, resolve_format
-from ytgrab.workers import DownloadWorker
+from ytgrab.workers import DownloadWorker, PlaylistProbeWorker
 
 (
     COLUMN_TITLE,
@@ -135,11 +135,82 @@ class MainWindow(QMainWindow):
             format_selector=format_spec.format_selector,
             postprocessors=format_spec.postprocessors,
             merge_output_format=format_spec.merge_output_format,
+            status=DownloadStatus.FETCHING,
         )
         self._items[item.id] = item
         self._append_row(item)
-        self._start_download(item)
+        self._probe_url(item)
         return item
+
+    def _probe_url(self, item: DownloadItem) -> None:
+        probe = PlaylistProbeWorker(item.id, item.url)
+        probe.signals.resolved.connect(self._on_probe_resolved)
+        probe.signals.error.connect(self._on_probe_error)
+        self.thread_pool.start(probe)
+
+    def _on_probe_error(self, item_id: str, message: str) -> None:
+        self._on_error(item_id, message)
+        self._on_status_changed(item_id, DownloadStatus.ERROR)
+
+    def _on_probe_resolved(self, item_id: str, info: dict) -> None:
+        item = self._items.get(item_id)
+        if item is None:
+            return
+
+        entries = info.get("entries")
+        if info.get("_type") == "playlist" and entries:
+            self._expand_playlist(item, entries)
+            return
+
+        canonical_url = info.get("webpage_url") or item.url
+        item.url = canonical_url
+        title = info.get("title")
+        if title:
+            item.title = title
+            row = self._rows[item_id]
+            self.queue_table.item(row, COLUMN_TITLE).setText(item.display_title())
+        self._start_download(item)
+
+    def _expand_playlist(self, placeholder: DownloadItem, entries: list[dict]) -> None:
+        format_spec = FormatSpec(
+            placeholder.format_selector,
+            placeholder.postprocessors,
+            placeholder.merge_output_format,
+        )
+        output_dir = placeholder.output_dir
+        self._remove_row(placeholder.id)
+
+        for entry in entries:
+            if not entry:
+                continue
+            entry_url = entry.get("url") or entry.get("webpage_url")
+            if not entry_url:
+                continue
+            child = DownloadItem(
+                url=entry_url,
+                output_dir=output_dir,
+                format_selector=format_spec.format_selector,
+                postprocessors=format_spec.postprocessors,
+                merge_output_format=format_spec.merge_output_format,
+            )
+            if entry.get("title"):
+                child.title = entry["title"]
+            self._items[child.id] = child
+            self._append_row(child)
+            self._start_download(child)
+
+    def _remove_row(self, item_id: str) -> None:
+        row = self._rows.pop(item_id, None)
+        if row is None:
+            return
+        self.queue_table.removeRow(row)
+        self._progress_bars.pop(item_id, None)
+        self._cancel_buttons.pop(item_id, None)
+        self._items.pop(item_id, None)
+        self._workers.pop(item_id, None)
+        for other_id, other_row in self._rows.items():
+            if other_row > row:
+                self._rows[other_id] = other_row - 1
 
     def _append_row(self, item: DownloadItem) -> None:
         row = self.queue_table.rowCount()
