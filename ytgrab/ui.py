@@ -7,12 +7,14 @@ from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QSpinBox,
@@ -24,7 +26,9 @@ from PySide6.QtWidgets import (
 
 from ytgrab.models import DownloadItem, DownloadStatus
 from ytgrab.presets import PRESET_CUSTOM, PRESET_LABELS, FormatSpec, resolve_format
-from ytgrab.workers import DownloadWorker, PlaylistProbeWorker
+from ytgrab.workers import DownloadWorker, FormatListWorker, PlaylistProbeWorker, format_bytes
+
+FORMAT_DIALOG_HEADERS = ["Format ID", "Ext", "Resolution", "FPS", "Filesize", "Codecs", "Note"]
 
 (
     COLUMN_TITLE,
@@ -71,8 +75,11 @@ class MainWindow(QMainWindow):
         self.url_input.returnPressed.connect(self._on_add_clicked)
         self.add_button = QPushButton("Add to queue")
         self.add_button.clicked.connect(self._on_add_clicked)
+        self.fetch_formats_button = QPushButton("Fetch available formats")
+        self.fetch_formats_button.clicked.connect(self._on_fetch_formats_clicked)
         input_row.addWidget(self.url_input)
         input_row.addWidget(self.add_button)
+        input_row.addWidget(self.fetch_formats_button)
         layout.addLayout(input_row)
 
         format_row = QHBoxLayout()
@@ -136,6 +143,25 @@ class MainWindow(QMainWindow):
             return
         self.add_item(url, self._current_format_spec())
         self.url_input.clear()
+
+    def _on_fetch_formats_clicked(self) -> None:
+        url = self.url_input.text().strip()
+        if not url:
+            return
+        self.fetch_formats_button.setEnabled(False)
+        worker = FormatListWorker(url)
+        worker.signals.resolved.connect(self._on_formats_resolved)
+        worker.signals.error.connect(self._on_formats_error)
+        self.thread_pool.start(worker)
+
+    def _on_formats_resolved(self, formats: list[dict]) -> None:
+        self.fetch_formats_button.setEnabled(True)
+        dialog = FormatsDialog(formats, self)
+        dialog.exec()
+
+    def _on_formats_error(self, message: str) -> None:
+        self.fetch_formats_button.setEnabled(True)
+        QMessageBox.warning(self, "Failed to fetch formats", message)
 
     def add_item(self, url: str, format_spec: FormatSpec | None = None) -> DownloadItem:
         format_spec = format_spec or resolve_format(PRESET_LABELS[0][0])
@@ -302,3 +328,35 @@ class MainWindow(QMainWindow):
 
     def _on_worker_finished(self, item_id: str) -> None:
         self._workers.pop(item_id, None)
+
+
+class FormatsDialog(QDialog):
+    def __init__(self, formats: list[dict], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Available formats")
+        self.resize(700, 400)
+
+        layout = QVBoxLayout(self)
+        table = QTableWidget(len(formats), len(FORMAT_DIALOG_HEADERS))
+        table.setHorizontalHeaderLabels(FORMAT_DIALOG_HEADERS)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        for row, fmt in enumerate(formats):
+            filesize = fmt.get("filesize") or fmt.get("filesize_approx")
+            codecs = f"{fmt.get('vcodec', 'none')} / {fmt.get('acodec', 'none')}"
+            fps = fmt.get("fps")
+            values = [
+                fmt.get("format_id", ""),
+                fmt.get("ext", ""),
+                fmt.get("resolution", ""),
+                f"{fps:g}" if fps else "",
+                format_bytes(filesize),
+                codecs,
+                fmt.get("format_note", ""),
+            ]
+            for column, value in enumerate(values):
+                table.setItem(row, column, QTableWidgetItem(str(value)))
+
+        layout.addWidget(table)
